@@ -120,6 +120,10 @@ GENERATION RULES
   }
 });
 
+app.get("/", (req, res) => {
+  res.send("FitForge API running");
+});
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`FitForge Backend running on port ${PORT}`);
 });
