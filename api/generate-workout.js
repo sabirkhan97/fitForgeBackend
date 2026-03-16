@@ -6,6 +6,12 @@ export default async function handler(req, res) {
   }
 
   try {
+
+    const body =
+      typeof req.body === "string"
+        ? JSON.parse(req.body)
+        : req.body;
+
     const {
       age,
       gender,
@@ -24,8 +30,9 @@ export default async function handler(req, res) {
       recovery_level,
       days_per_week,
       custom_note,
-    } = req.body;
+    } = body;
 
+    
     if (!age || !gender || !goal || !experience || !workout_duration || !location) {
       return res.status(400).json({ error: "Missing required fields" });
     }
