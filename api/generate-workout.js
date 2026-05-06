@@ -94,9 +94,7 @@ export default async function handler(req, res) {
 `.trim();
 
         const workout = await generateWorkout(prompt);
-        const workoutWithVideos = attachVideos(workout);
-            console.log(workoutWithVideos);
-        return res.status(200).json(workoutWithVideos);
+        return res.status(200).json(workout);
 
     } catch (error) {
         return res.status(500).json({
