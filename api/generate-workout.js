@@ -1,3 +1,4 @@
+import { attachVideos } from "../commons/attachVideos.js";
 import { generateWorkout } from "../utils/mistral.js";
 
 export default async function handler(req, res) {
@@ -68,34 +69,35 @@ export default async function handler(req, res) {
                 : "Weak muscles: none";
 
         const prompt = `
-USER PROFILE
-Age: ${age}
-Gender: ${gender}
-Height: ${height || "unknown"} cm
-Weight: ${weight || "unknown"} kg
-Experience: ${experience}
-Days/week: ${days_per_week ?? 4}
-
-WORKOUT
-Goal: ${goal}
-Focus: ${focus || "full body"}
-Duration: ${workout_duration} min
-Location: ${location}
-Equipment: ${equipment?.join(", ") || "bodyweight"}
-
-${recoveryNote}
-${intensityNote}
-
-Injuries: ${injuries?.join(", ") || "none"}
-
-${weakSection}
-
-${custom_note ? `Custom: ${custom_note}` : ""}
+                            USER PROFILE
+                            Age: ${age}
+                            Gender: ${gender}
+                            Height: ${height || "unknown"} cm
+                            Weight: ${weight || "unknown"} kg
+                            Experience: ${experience}
+                            Days/week: ${days_per_week ?? 4}
+                                
+                            WORKOUT
+                            Goal: ${goal}
+                            Focus: ${focus || "full body"}
+                            Duration: ${workout_duration} min
+                            Location: ${location}
+                            Equipment: ${equipment?.join(", ") || "bodyweight"}
+                                
+                            ${recoveryNote}
+                            ${intensityNote}
+                                
+                            Injuries: ${injuries?.join(", ") || "none"}
+                                
+                            ${weakSection}
+                                
+                            ${custom_note ? `Custom: ${custom_note}` : ""}
 `.trim();
 
         const workout = await generateWorkout(prompt);
-
-        return res.status(200).json(workout);
+        const workoutWithVideos = attachVideos(workout);
+            console.log(workoutWithVideos);
+        return res.status(200).json(workoutWithVideos);
 
     } catch (error) {
         return res.status(500).json({
