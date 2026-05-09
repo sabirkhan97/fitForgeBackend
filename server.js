@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import { createClient } from "@supabase/supabase-js";
 import { generateWorkout } from "./utils/mistral.js";
 
 const app = express();
@@ -7,6 +8,38 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+const supabaseAdmin = createClient(supabaseUrl ?? "", serviceRoleKey ?? "", {
+  auth: { persistSession: false },
+});
+
+async function verifySupabaseAccessToken(accessToken) {
+  if (!accessToken) return null;
+
+  // Verify via Supabase Auth REST API using the provided JWT.
+  // This avoids SDK signature mismatches and works consistently.
+  const resp = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!resp.ok) return null;
+
+  const json = await resp.json();
+  // json.user.id is the UUID.
+  return json?.user?.id ?? null;
+}
+
+function withNullable(value) {
+  if (value === undefined) return null;
+  return value;
+}
+
 
 app.post("/generate-workout", async (req, res) => {
   try {
@@ -30,6 +63,9 @@ app.post("/generate-workout", async (req, res) => {
       recovery_level,   // string    "fresh" | "normal" | "tired" | "very_tired"
       days_per_week,    // number    how many days/week user trains
       custom_note,      // string?   free-text from user
+      // ── 🆕 auth context (optional) ─────────────────────────────────────────
+      user_id,
+      access_token,
     } = req.body;
 
     // ── Validation (only required fields) ────────────────────────────────────
@@ -108,6 +144,47 @@ GENERATION RULES
 `.trim();
 
     const workout = await generateWorkout(prompt);
+
+    // ── Supabase save (optional; only for authenticated users) ─────────
+    if (user_id && access_token) {
+      try {
+        const verifiedUserId = await verifySupabaseAccessToken(access_token);
+        if (verifiedUserId && verifiedUserId === user_id) {
+          await supabaseAdmin
+            .from('workouts')
+            .insert({
+              user_id,
+              focus: focus ?? null,
+              duration: workout_duration ?? null,
+              goal: goal ?? null,
+              workout_data: workout,
+              // store the exact generator inputs inside workout_data (keeps schema stable)
+              // so the app can later show what generated it.
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              input_parameters: {
+                age,
+                gender,
+                height,
+                weight,
+                experience,
+                focus,
+                location,
+                injuries,
+                cardio,
+                equipment,
+                weak_muscles,
+                intensity_style,
+                recovery_level,
+                days_per_week,
+                custom_note,
+              },
+            });
+        }
+      } catch (saveErr) {
+        // Don't break generation for any storage failure
+        console.warn('Workout save failed:', saveErr?.message ?? saveErr);
+      }
+    }
 
     res.json(workout);
 
