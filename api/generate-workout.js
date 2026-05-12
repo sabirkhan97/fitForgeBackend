@@ -1,12 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 import { generateWorkout } from "../utils/mistral.js";
 
-// Initialize Supabase admin client (bypasses RLS – safe on backend)
 const supabase = createClient(
     process.env.SUPABASE_URL,
     process.env.SUPABASE_SERVICE_ROLE_KEY
 );
+
 export default async function handler(req, res) {
+    // CORS headers – allow Authorization header
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -25,12 +26,12 @@ export default async function handler(req, res) {
             access_token      // optional – from frontend
         } = body;
 
-        // Basic validation (required fields for generation)
+        // Basic validation
         if (!age || !gender || !goal || !experience || !workout_duration || !location) {
             return res.status(400).json({ error: "Missing required fields" });
         }
 
-        // ----- Build the prompt (unchanged) -----
+        // ---------- Build base user prompt ----------
         const recoveryNote = {
             fresh: "Energy: FRESH — push max volume and intensity today",
             normal: "Energy: NORMAL — standard session",
@@ -50,42 +51,64 @@ export default async function handler(req, res) {
             ? `Weak muscles:\n${weak_muscles.map(m => `- ${m.replace(/_/g, " ")}`).join("\n")}`
             : "Weak muscles: none";
 
-        const prompt = `
-      USER PROFILE
-      Age: ${age}
-      Gender: ${gender}
-      Height: ${height || "unknown"} cm
-      Weight: ${weight || "unknown"} kg
-      Experience: ${experience}
-      Days/week: ${days_per_week ?? 4}
-          
-      WORKOUT
-      Goal: ${goal}
-      Focus: ${focus || "full body"}
-      Duration: ${workout_duration} min
-      Location: ${location}
-      Equipment: ${equipment?.join(", ") || "bodyweight"}
-          
-      ${recoveryNote}
-      ${intensityNote}
-          
-      Injuries: ${injuries?.join(", ") || "none"}
-          
-      ${weakSection}
-          
-      ${custom_note ? `Custom: ${custom_note}` : ""}
-    `.trim();
+        let basePrompt = `
+USER PROFILE
+Age: ${age}
+Gender: ${gender}
+Height: ${height || "unknown"} cm
+Weight: ${weight || "unknown"} kg
+Experience: ${experience}
+Days/week: ${days_per_week ?? 4}
+    
+WORKOUT
+Goal: ${goal}
+Focus: ${focus || "full body"}
+Duration: ${workout_duration} min
+Location: ${location}
+Equipment: ${equipment?.join(", ") || "bodyweight"}
+    
+${recoveryNote}
+${intensityNote}
+    
+Injuries: ${injuries?.join(", ") || "none"}
+    
+${weakSection}
+    
+${custom_note ? `Custom: ${custom_note}` : ""}
+`.trim();
 
-        // ----- Generate workout -----
-        const workout = await generateWorkout(prompt);
-
-        // ----- Save to Supabase IF user is logged in and token is valid -----
+        // ---------- Verify user and fetch history (if logged in) ----------
         let verifiedUserId = null;
+        let historyContext = "";
+
         if (user_id && access_token) {
             try {
                 const { data: { user }, error: tokenError } = await supabase.auth.getUser(access_token);
                 if (!tokenError && user && user.id === user_id) {
                     verifiedUserId = user_id;
+
+                    // Fetch last 3 workouts for this user
+                    const { data: pastWorkouts, error: fetchError } = await supabase
+                        .from('workouts')
+                        .select('workout_data, focus, created_at')
+                        .eq('user_id', verifiedUserId)
+                        .order('created_at', { ascending: false })
+                        .limit(3);
+
+                    if (!fetchError && pastWorkouts && pastWorkouts.length > 0) {
+                        historyContext = "\n\n📋 **USER'S WORKOUT HISTORY (for progressive adaptation)**\n";
+                        pastWorkouts.forEach((w, idx) => {
+                            const date = new Date(w.created_at).toLocaleDateString();
+                            const focusName = w.focus || "full body";
+                            let exercisesSummary = "";
+                            if (w.workout_data?.exercises?.length) {
+                                const exNames = w.workout_data.exercises.slice(0, 3).map(e => e.name).join(", ");
+                                exercisesSummary = ` (exercises: ${exNames}${w.workout_data.exercises.length > 3 ? "…" : ""})`;
+                            }
+                            historyContext += `- ${date}: ${focusName}${exercisesSummary}\n`;
+                        });
+                        historyContext += `\nUse this history to ensure progressive overload, avoid repeating the exact same exercises, balance muscle groups, and respect recovery. If the user has done a similar workout recently, slightly increase intensity or volume, or change variation.`;
+                    }
                 } else {
                     console.warn(`Token verification failed for user ${user_id}`);
                 }
@@ -94,7 +117,13 @@ export default async function handler(req, res) {
             }
         }
 
-        // Insert asynchronously (do NOT await – don't block response)
+        // Combine prompt with history (if any)
+        const finalPrompt = basePrompt + historyContext;
+
+        // ---------- Generate workout using AI ----------
+        const workout = await generateWorkout(finalPrompt);
+
+        // ---------- Asynchronously save to Supabase (only for verified users) ----------
         if (verifiedUserId) {
             const inputParameters = {
                 age, gender, height, weight, goal, experience, workout_duration, focus,
@@ -115,7 +144,7 @@ export default async function handler(req, res) {
             }).catch(err => console.error("Insert promise failed:", err));
         }
 
-        // ----- Return workout to frontend (always, even if save fails) -----
+        // ---------- Return workout to frontend ----------
         return res.status(200).json(workout);
 
     } catch (error) {
