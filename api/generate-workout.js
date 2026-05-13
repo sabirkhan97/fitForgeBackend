@@ -80,12 +80,14 @@ ${custom_note ? `Custom: ${custom_note}` : ""}
         // ---------- Verify user and fetch history (if logged in) ----------
         let verifiedUserId = null;
         let historyContext = "";
+        console.log(`🔐 Auth check: user_id=${user_id}, has_token=${!!access_token}`);
 
         if (user_id && access_token) {
             try {
                 const { data: { user }, error: tokenError } = await supabase.auth.getUser(access_token);
                 if (!tokenError && user && user.id === user_id) {
                     verifiedUserId = user_id;
+                    console.log(`✅ Token verified for ${user_id}`);
 
                     // Fetch last 3 workouts for this user
                     const { data: pastWorkouts, error: fetchError } = await supabase
