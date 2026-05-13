@@ -22,8 +22,7 @@ export default async function handler(req, res) {
             age, gender, height, weight, goal, experience, workout_duration, focus,
             injuries, cardio, location, equipment, weak_muscles, intensity_style,
             recovery_level, days_per_week, custom_note,
-            user_id,          // optional – from frontend
-            access_token      // optional – from frontend
+            access_token      // only need token; user_id is ignored
         } = body;
 
         // Basic validation
@@ -77,19 +76,19 @@ ${weakSection}
 ${custom_note ? `Custom: ${custom_note}` : ""}
 `.trim();
 
-        // ---------- Verify user and fetch history (if logged in) ----------
+        // ---------- Verify user from token (MOST RELIABLE) ----------
         let verifiedUserId = null;
         let historyContext = "";
-        console.log(`🔐 Auth check: user_id=${user_id}, has_token=${!!access_token}`);
+        console.log(`🔐 Auth check: has_token=${!!access_token}`);
 
-        if (user_id && access_token) {
+        if (access_token) {
             try {
                 const { data: { user }, error: tokenError } = await supabase.auth.getUser(access_token);
-                if (!tokenError && user && user.id === user_id) {
-                    verifiedUserId = user_id;
-                    console.log(`✅ Token verified for ${user_id}`);
+                if (!tokenError && user) {
+                    verifiedUserId = user.id;
+                    console.log(`✅ Token verified for user: ${verifiedUserId}`);
 
-                    // Fetch last 3 workouts for this user
+                    // Fetch last 3 workouts for this user (for history)
                     const { data: pastWorkouts, error: fetchError } = await supabase
                         .from('workouts')
                         .select('workout_data, focus, created_at')
@@ -112,11 +111,13 @@ ${custom_note ? `Custom: ${custom_note}` : ""}
                         historyContext += `\nUse this history to ensure progressive overload, avoid repeating the exact same exercises, balance muscle groups, and respect recovery. If the user has done a similar workout recently, slightly increase intensity or volume, or change variation.`;
                     }
                 } else {
-                    console.warn(`Token verification failed for user ${user_id}`);
+                    console.warn(`❌ Token verification failed: ${tokenError?.message || 'Unknown error'}`);
                 }
             } catch (err) {
-                console.error("Token verification error:", err.message);
+                console.error("🔥 Token verification error:", err.message);
             }
+        } else {
+            console.log("👤 No token provided – guest user, workout will not be saved.");
         }
 
         // Combine prompt with history (if any)
@@ -142,7 +143,7 @@ ${custom_note ? `Custom: ${custom_note}` : ""}
                 goal: goal
             }).then(({ error }) => {
                 if (error) console.error("Supabase insert error:", error.message);
-                else console.log(`Workout saved for user ${verifiedUserId}`);
+                else console.log(`✅ Workout saved for user ${verifiedUserId}`);
             }).catch(err => console.error("Insert promise failed:", err));
         }
 
