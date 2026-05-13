@@ -22,15 +22,27 @@ export default async function handler(req, res) {
             age, gender, height, weight, goal, experience, workout_duration, focus,
             injuries, cardio, location, equipment, weak_muscles, intensity_style,
             recovery_level, days_per_week, custom_note,
-            access_token      // only need token; user_id is ignored
         } = body;
+
+        // ---------- Extract token from Authorization header or body ----------
+        let token = null;
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            token = authHeader.substring(7);
+            console.log("🔑 Token extracted from Authorization header");
+        } else if (body.access_token) {
+            token = body.access_token;
+            console.log("🔑 Token extracted from request body (access_token)");
+        } else {
+            console.log("⚠️ No token found – guest user, workout will not be saved.");
+        }
 
         // Basic validation
         if (!age || !gender || !goal || !experience || !workout_duration || !location) {
             return res.status(400).json({ error: "Missing required fields" });
         }
 
-        // ---------- Build base user prompt ----------
+        // ---------- Build base user prompt (unchanged) ----------
         const recoveryNote = {
             fresh: "Energy: FRESH — push max volume and intensity today",
             normal: "Energy: NORMAL — standard session",
@@ -79,16 +91,15 @@ ${custom_note ? `Custom: ${custom_note}` : ""}
         // ---------- Verify user from token (MOST RELIABLE) ----------
         let verifiedUserId = null;
         let historyContext = "";
-        console.log(`🔐 Auth check: has_token=${!!access_token}`);
 
-        if (access_token) {
+        if (token) {
             try {
-                const { data: { user }, error: tokenError } = await supabase.auth.getUser(access_token);
+                const { data: { user }, error: tokenError } = await supabase.auth.getUser(token);
                 if (!tokenError && user) {
                     verifiedUserId = user.id;
                     console.log(`✅ Token verified for user: ${verifiedUserId}`);
 
-                    // Fetch last 3 workouts for this user (for history)
+                    // Fetch last 3 workouts for progressive adaptation
                     const { data: pastWorkouts, error: fetchError } = await supabase
                         .from('workouts')
                         .select('workout_data, focus, created_at')
@@ -98,7 +109,7 @@ ${custom_note ? `Custom: ${custom_note}` : ""}
 
                     if (!fetchError && pastWorkouts && pastWorkouts.length > 0) {
                         historyContext = "\n\n📋 **USER'S WORKOUT HISTORY (for progressive adaptation)**\n";
-                        pastWorkouts.forEach((w, idx) => {
+                        pastWorkouts.forEach((w) => {
                             const date = new Date(w.created_at).toLocaleDateString();
                             const focusName = w.focus || "full body";
                             let exercisesSummary = "";
@@ -111,7 +122,7 @@ ${custom_note ? `Custom: ${custom_note}` : ""}
                         historyContext += `\nUse this history to ensure progressive overload, avoid repeating the exact same exercises, balance muscle groups, and respect recovery. If the user has done a similar workout recently, slightly increase intensity or volume, or change variation.`;
                     }
                 } else {
-                    console.warn(`❌ Token verification failed: ${tokenError?.message || 'Unknown error'}`);
+                    console.error(`❌ Token verification failed: ${tokenError?.message || 'User not found'}`);
                 }
             } catch (err) {
                 console.error("🔥 Token verification error:", err.message);
@@ -142,16 +153,18 @@ ${custom_note ? `Custom: ${custom_note}` : ""}
                 duration: workout_duration,
                 goal: goal
             }).then(({ error }) => {
-                if (error) console.error("Supabase insert error:", error.message);
+                if (error) console.error("❌ Supabase insert error:", error.message);
                 else console.log(`✅ Workout saved for user ${verifiedUserId}`);
-            }).catch(err => console.error("Insert promise failed:", err));
+            }).catch(err => console.error("💥 Insert promise failed:", err));
+        } else {
+            console.log("⏭️ Skipping insert – no verified user ID.");
         }
 
-        // ---------- Return workout to frontend ----------
+        // ---------- Return workout to frontend (always) ----------
         return res.status(200).json(workout);
 
     } catch (error) {
-        console.error("Generator error:", error);
+        console.error("🔥 Generator error:", error);
         return res.status(500).json({
             error: "Workout generation failed",
             details: error.message,
